@@ -1,0 +1,80 @@
+package com.encrypted_chat;
+
+// ChatServer.java
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.math.BigInteger;
+import java.net.ServerSocket;
+import java.net.Socket;
+
+public class ChatServer implements Runnable {
+    private ServerSocket serverSocket;
+    private Socket clientSocket;
+    private PrintWriter out;
+    private BufferedReader in;
+    private CryptoUtils.DiffieHellman dh;
+    private CryptoUtils.AESEncryption encryption;
+    private volatile boolean running = true;
+    
+    public interface MessageCallback { void onMessage(String message); }
+    public interface StatusCallback { void onStatus(String status); }
+    
+    private MessageCallback messageCallback;
+    private StatusCallback statusCallback;
+    
+    public ChatServer(int port, String username) throws IOException {
+        this.serverSocket = new ServerSocket(port);
+        this.dh = new CryptoUtils.DiffieHellman();
+        this.encryption = new CryptoUtils.AESEncryption();
+    }
+    
+    public void setMessageCallback(MessageCallback callback) { this.messageCallback = callback; }
+    public void setStatusCallback(StatusCallback callback) { this.statusCallback = callback; }
+    
+    @Override
+    public void run() {
+        try {
+            updateStatus("Waiting for client connection...");
+            clientSocket = serverSocket.accept();
+            updateStatus("Client connected. Performing key exchange...");
+            
+            out = new PrintWriter(clientSocket.getOutputStream(), true);
+            in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+            
+            // Key exchange
+            out.println(dh.getPublicKey().toString());
+            BigInteger clientPublicKey = new BigInteger(in.readLine());
+            encryption.setKey(dh.computeSharedSecret(clientPublicKey));
+            
+            updateStatus("Secure connection established!");
+            
+            String encryptedMsg;
+            while (running && (encryptedMsg = in.readLine()) != null) {
+                if (messageCallback != null) messageCallback.onMessage(encryption.decrypt(encryptedMsg));
+            }
+        } catch (Exception e) {
+            updateStatus("Error: " + e.getMessage());
+        }
+    }
+    
+    public void sendMessage(String message) {
+        if (out != null) {
+            out.println(encryption.encrypt(message));
+            if (messageCallback != null) messageCallback.onMessage(message);
+        }
+    }
+    
+    private void updateStatus(String status) {
+        if (statusCallback != null) statusCallback.onStatus(status);
+    }
+    
+    public void stop() {
+        running = false;
+        try {
+            if (clientSocket != null) clientSocket.close();
+            if (serverSocket != null) serverSocket.close();
+        } catch (IOException e) {}
+    }
+}
